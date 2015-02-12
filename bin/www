@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 var debug = require('debug')('osLoad');
 var app = require('../app');
-var rest = require('./rest/rest')();
+var rest = require('../rest/rest')();
+var os = require('../os/os')();
 
 app.set('port', process.env.PORT || 3000);
 
