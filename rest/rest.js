@@ -132,7 +132,7 @@ module.exports = function () {
      * @param {function} next
      * @private
      */
-    self._register = function (req, resp, next) {
+    self._registration = function (req, resp, next) {
         rest.Log.d("New Request register");
         if (req.params && req.params.type && !isNaN(Number(req.params.type))
             && (Number(req.params.type) == 0 || Number(req.params.type) < self._regType.length)) {
