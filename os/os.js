@@ -1,5 +1,5 @@
 /**
- * Created by darky on 15-02-11.
+ * Created by pteyssedre on 15-02-11.
  */
 
 var _os = require("os"),
