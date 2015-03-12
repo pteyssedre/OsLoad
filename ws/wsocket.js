@@ -78,11 +78,12 @@ var WS = {
          */
         _clients: [],
         /**
-         *
+         * Initialization of the {@link WS#Socket} object.
          * @param options
          * @returns {WS}
          */
         Init: function (options) {
+            WS.Log.d("Initialization of the socket");
             this._parseOpts(options);
             switch (this._mode) {
                 case "server":
@@ -127,6 +128,7 @@ var WS = {
          * @private
          */
         _OnClientConnect: function (connection) {
+            WS.Log.d("New client connection id:", connection.key);
             connection.UID = this.GUID();
             var index = this._clients.push(connection) - 1;
             this._addListener(index);
@@ -138,10 +140,13 @@ var WS = {
          * @private
          */
         _addListener: function (index) {
-            this._clients[index].on("text", function (strMessage) {
+            var con = this._clients[index];
+            con.on("text", function (strMessage) {
+                WS.Log.d("New client message id:", con.key);
                 //TODO: client should subscribe to messaging relay
             });
-            this._clients[index].on("close", function (code, reason) {
+            con.on("close", function (code, reason) {
+                WS.Log.d("New client disconnect id:", con.key);
                 //TODO:Stop messaging relay
             });
         }
