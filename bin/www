@@ -1,13 +1,228 @@
 #!/usr/bin/env node
 var debug = require('debug')('osLoad');
 var app = require('../app');
-var rest = require('../rest/rest')();
-var os = require('../os/os')();
+/**
+ * Rest Service Helper
+ * @type {RestHelper}
+ */
+var restHelper = require('../rest/rest');
+/**
+ * Os Helper
+ * @type {OsHelper}
+ */
+var osHelper = require('../os/os');
+var resources = new osHelper.Resources();
+var dbHelper = require('../db/db');
+var utils = require('../utils/utils');
+/**
+ * Default array variable which contains all pair to identify all valid sessions.
+ * @type {object}
+ * @private
+ */
+var _valid_session = {
+    token: {k: "token", v: "123456789", l: -1}
+};
+var _sVPID = -999;
+// <editor-fold desc="DATA INITIALISATION">
+/**
+ * DataManager to validate, create, update and delete databases and data content.
+ * @type {DbHelper.DataSource}
+ */
+var db = (new dbHelper.DataSource()).InitDBConnection('127.0.0.1', 5984);
+// </editor-fold>
 
+// <editor-fold desc="REST INITIALISATION">
+var rest = (new restHelper.RestFull()).InitServer();
+/**
+ * Implementation of RequestValidation for REST Service request validation.
+ * This method will look for the 'Authorisation' header inside the request and given the current valid sessions
+ * the request will be allow or not.
+ *
+ * @param request
+ * @return boolean;
+ */
+rest.RequestValidation = function (request) {
+    if (request && request.headers) {
+        for (var head in request.headers) {
+            if (request.headers.hasOwnProperty(head)) {
+                if (head.toLowerCase().toUpperCase() === "AUTHORISATION") {
+                    var d = request.headers[head];
+                    d = d.substr('Basic '.length, d.length);
+                    var dd = utils.Base64.decode(d);
+                    var pair = dd.split(":");
+                    return (pair.length > 1 && _valid_session.hasOwnProperty(pair[0]) && _valid_session[pair[0]].v == pair[1]);
+                }
+            }
+        }
+    } else {
+        return false;
+    }
+};
+/**
+ *
+ * @param data
+ * @param success
+ * @param fail
+ * @constructor
+ */
+rest.OnUserRegistration = function (data, success, fail) {
+    if (data) {
+        db.AddUser(data, function (result) {
+            if (success) {
+                success({message: "user added", code: 200, user: result});
+            }
+        }, function (faillure) {
+            if (fail) {
+                fail({message: "non-valid data", err: faillure, code: -1});
+            }
+        });
+    } else {
+        if (fail) {
+            fail({message: "non-valid data", code: -1});
+        }
+    }
+};
+/**
+ * Implementation of OnStatisticsRequested of the REST Service.
+ * This function will return the statistics of the current machine for now. In a further implementation
+ * it will look for correct machine base on the machineId, so it could be use by client and server.
+ *
+ * @param {string} machineId
+ * @param {number} type
+ * @param {Function} callback
+ * @constructor
+ */
+rest.OnStatisticsRequested = function (machineId, type, callback) {
+    //TODO: if machine equal local
+    switch (Number(type)) {
+        case 0: //Quick Look mode
+            os.getGlobalUsage(function (global) {
+                os.getRootSpace(function (err, total, free, status) {
+                    var data = {global: {cpu: global, space: {status: status, total: total, free: free}}};
+                    if (callback) {
+                        callback(data);
+                    }
+                }, false);
+            });
+            break;
+        case 1: //Full CPU
+            os.getGlobalUsage(function (global) {
+                os.UsageByCpu(function (units) {
+                    var data = {cpu: {global: global}, cores: units};
+                    if (callback) {
+                        callback(data);
+                    }
+                });
+            });
+            break;
+        case 2: //Full disk
+            os.getRootSpace(function (err, total, free, status) {
+                var data = {space: {global: {status: status, total: total, free: free}}};
+                if (callback) {
+                    callback(data);
+                }
+            }, false);
+            break;
+        case 3: //Full stats
+            break;
+    }
+};
+/**
+ * Implementation of OnUserAuthentication of REST Service.
+ * @param {Object} credential
+ * @param {Function} onSuccess
+ * @param {Function} onFailure
+ * @constructor
+ */
+rest.OnUserAuthentication = function (credential, onSuccess, onFailure) {
+    if (credential && credential.hasOwnProperty("login") && credential.hasOwnProperty("password")) {
+        db.ValidateCredentials(credential.login, credential.password, function (valid, userId) {
+            if (valid) {
+                var token = _generateToken(userId);
+                if (token && onSuccess) {
+                    onSuccess({message: "authentication successful", code: 0, userId: userId, token: token});
+                }
+            } else {
+                if (onFailure) {
+                    onFailure({message: "non-valid login or password", code: 1});
+                }
+            }
+        });
+    } else {
+        if (onFailure) {
+            onFailure({message: "non-valid data", code: -1});
+        }
+    }
+};
+/**
+ * Implementation of OnKeepAliveToken of REST Service.
+ * @param {Object} credential
+ * @param {Function} onSuccess
+ * @param {Function} onFailure
+ * @constructor
+ */
+rest.OnKeepAliveToken = function (credential, onSuccess, onFailure) {
+    if (credential && credential.hasOwnProperty("token") && credential.hasOwnProperty("userId")) {
+        if (_isValidTokenPair(credential.userId, credential.token)) {
+
+        } else {
+            if (onFailure) {
+                onFailure({message: "non-valid token pair", code: 1});
+            }
+        }
+    } else {
+        if (onFailure) {
+            onFailure({message: "non-valid data", code: -1});
+        }
+    }
+};
+// </editor-fold>
+
+function _generateToken(base) {
+    if (base && base.length > 4) {
+        var v = utils.Base64.encode(base);
+        var l = utils.Date.add("00:15:00").getTime();
+        _valid_session[base] = {k: base, v: v, l: l};
+        _startSessionValidator();
+        return v;
+    }
+}
+
+function _startSessionValidator() {
+    if (_sVPID === -999) {
+        _sVPID = setInterval(function () {
+            if (Object.keys(_valid_session).length === 0) {
+                clearInterval(_sVPID);
+                _sVPID = -999;
+                return;
+            }
+            for(var j in _valid_session){
+                if(_valid_session.hasOwnProperty(j) && _valid_session[j] && utils.Date.past(_valid_session[j].l)){
+                    delete _valid_session[j];
+                }
+            }
+        }, 45000);
+    }
+}
+
+function _isValidTokenPair(k, v) {
+    return (k && v && _valid_session.hasOwnProperty(k) && _valid_session[k].v === v && !utils.Date.past(_valid_session[k].l));
+}
+
+// <editor-fold desc="UI INITIALISATION">
 app.set('port', process.env.PORT || 3000);
-
-rest.InitServer();
-
-var server = app.listen(app.get('port'), function() {
-  debug('Express server listening on port ' + server.address().port);
+var server = app.listen(app.get('port'), function () {
+    debug('Express server listening on port ' + server.address().port);
+    resources.getGlobalUsage(function (global) {
+        console.log("CPU at", global, "%");
+    });
+    resources.UsageByCpu(function (data) {
+        for(var i in data){
+            console.log("CPU"+i,"at", data[i], "%");
+        }
+    });
+    resources.getRootSpace(function (err, total, free, status) {
+        console.log("drive /", "status:", status, "total:", total, "free:", free);
+    }, true);
 });
+// </editor-fold>
